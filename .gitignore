@@ -1,0 +1,9 @@
+.DS_Store
+._*
+Icon*
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+data/parquet/sales_upload.parquet

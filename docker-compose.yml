@@ -1,0 +1,11 @@
+services:
+  twv-planning-desk:
+    build: .
+    container_name: twv_kieu_dda_demo
+    ports:
+      - "8501:8501"
+    environment:
+      - PYTHONPATH=/app/packages:/app/apps:/app/apps/web
+    volumes:
+      - ./data/results/app_runs:/app/data/results/app_runs
+    restart: unless-stopped
