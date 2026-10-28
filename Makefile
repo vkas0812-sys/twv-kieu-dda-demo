@@ -10,7 +10,7 @@ api:
 	$(PY) -m uvicorn api.main:app --app-dir apps --port 8000
 
 test:
-	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 $(PY) -m pytest -q tests/test_acceptance.py
+	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 $(PY) -m pytest -q tests/
 
 public:
 	npx --yes localtunnel --port 8501

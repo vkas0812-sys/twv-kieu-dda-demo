@@ -395,12 +395,21 @@ with tab_po:
         # Fallback to train if oos not available
         sel_rows = rows[rows["policy"] == chosen_po_pol].copy()
 
-    # Optional On-hand stock input
+    # Filter out non-optimal or failed solver rows
+    if "status" in sel_rows.columns:
+        sel_rows = sel_rows[sel_rows["status"].astype(str).str.lower().str.contains("optimal|converged|ok|solved")]
+
+    if sel_rows.empty or sel_rows["total_y"].sum() <= 0:
+        st.warning("⚠️ Không tìm thấy nghiệm tối ưu hợp lệ (`status == 'Optimal'`) hoặc tổng định mức mục tiêu bằng 0. Không thể phát hành PO.")
+        st.stop()
+
+    # On-hand stock input based on the exact SKUs of the active run
+    target_skus = list(sel_rows["sku"].dropna().unique())
     with st.expander("📝 Điều chỉnh Tồn kho Khả dụng Hiện có (On-hand Stock) — Mặc định 0 chai cho đợt đặt hàng mới"):
         st.caption("Nhập số lượng chai hiện có trong kho nếu muốn khấu trừ trước khi đặt hàng mới:")
-        stock_cols = st.columns(min(len(skus), 4) or 1)
+        stock_cols = st.columns(min(len(target_skus), 4) or 1)
         on_hand_stocks: dict[str, float] = {}
-        for idx, s in enumerate(skus):
+        for idx, s in enumerate(target_skus):
             c = stock_cols[idx % len(stock_cols)]
             on_hand_stocks[s] = c.number_input(f"Tồn kho {s} (chai):", min_value=0.0, value=0.0, step=6.0, key=f"on_hand_{s}")
 
@@ -412,6 +421,7 @@ with tab_po:
         topup_strategy=topup_strat,
         current_stocks=on_hand_stocks,
         baseline=baseline,
+        split=po_split,
     )
 
     summary = plan["summary"]
@@ -429,7 +439,9 @@ with tab_po:
     prog_ratio = min(1.0, float(summary["final_bottles"]) / max(1, summary["moq_bottles"]))
     st.progress(prog_ratio)
 
-    if summary["moq_met"]:
+    if summary["final_bottles"] == 0:
+        st.info("ℹ️ **Không có nhu cầu đặt hàng mới:** Tồn kho hiện có đã đủ đáp ứng định mức mục tiêu $y^*$. Không phát sinh Purchase Order.")
+    elif summary["moq_met"]:
         st.success(
             f"✅ **Đạt chỉ tiêu MOQ Nhà cung cấp!** Tổng lượng đặt: **{summary['final_bottles']:,} chai** "
             f"(= **{summary['final_cartons']} thùng nguyên**), vượt ngưỡng tối thiểu {summary['moq_bottles']:,} chai. Đủ điều kiện phát lệnh PO."
@@ -438,7 +450,7 @@ with tab_po:
         st.warning(
             f"⚠️ **Chưa đủ MOQ Nhà cung cấp!** Hiện có **{summary['final_bottles']:,} chai** ({summary['final_cartons']} thùng), "
             f"còn thiếu **{summary['deficit_bottles']:,} chai** ({summary['deficit_cartons']} thùng) để đủ chuyến hàng {summary['moq_bottles']:,} chai. "
-            f"Hãy bật chiến lược *Ưu tiên hàng bán chạy* ở trên hoặc chọn thêm SKU vào giỏ."
+            f"Hãy bật chiến lược *Ưu tiên hàng bán chạy* ở trên hoặc chọn thêm SKU cùng nhà cung cấp."
         )
 
     # Table 1: PO to Supplier
