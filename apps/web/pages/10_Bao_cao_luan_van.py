@@ -20,7 +20,7 @@ from api.services.thesis_report import (
     get_portfolio_segmentation_summary,
     render_full_markdown_report,
 )
-from bootstrap import format_sku, gate, guardrail_banner, page_header, sku_options
+from bootstrap import POLICY_COLOR, format_sku, gate, guardrail_banner, page_header, sku_options
 
 gate("TWV — 10. Báo cáo Tổng hợp Luận văn & Khuyến nghị Quản trị")
 
@@ -160,16 +160,22 @@ with tab_tradeoff:
         """
     )
 
+    color_scale = alt.Scale(
+        domain=["Kieu-DDA-VP", "Kieu-DDA-FP", "Decentralized"],
+        range=[POLICY_COLOR["Kieu-DDA-VP"], POLICY_COLOR["Kieu-DDA-FP"], POLICY_COLOR["Decentralized"]],
+    )
+    inv_df_plot = inv_df.copy()
+    inv_df_plot["sku_label"] = inv_df_plot["sku"] + " (" + inv_df_plot["ABC"] + ")"
+
     c_sc1, c_sc2 = st.columns([1.6, 1.0])
     with c_sc1:
-        tradeoff_plot = (
-            alt.Chart(inv_df)
-            .mark_point(filled=True, size=160)
+        points_tradeoff = (
+            alt.Chart(inv_df_plot)
+            .mark_circle(size=220)
             .encode(
                 x=alt.X("cost_per_unit:Q", title="Chi phí Đơn vị (VND/chai)", scale=alt.Scale(zero=False)),
                 y=alt.Y("fill_rate:Q", title="Tỷ lệ Phục vụ (Fill Rate)", scale=alt.Scale(domain=[0.35, 1.05])),
-                color=alt.Color("policy:N", title="Chính sách Tồn kho"),
-                shape=alt.Shape("ABC:N", title="Phân khúc"),
+                color=alt.Color("policy:N", title="Chính sách Tồn kho", scale=color_scale),
                 tooltip=[
                     alt.Tooltip("sku:N", title="Mã SKU"),
                     alt.Tooltip("item_name:N", title="Tên rượu"),
@@ -180,9 +186,18 @@ with tab_tradeoff:
                     alt.Tooltip("WC:Q", title="Vốn lưu động", format=",.0f đ"),
                 ],
             )
-            .properties(height=380)
         )
-        st.altair_chart(tradeoff_plot, use_container_width=True)
+        labels_tradeoff = (
+            alt.Chart(inv_df_plot)
+            .mark_text(align="center", baseline="bottom", dy=-10, fontSize=11, fontWeight="bold")
+            .encode(
+                x=alt.X("cost_per_unit:Q", scale=alt.Scale(zero=False)),
+                y=alt.Y("fill_rate:Q", scale=alt.Scale(domain=[0.35, 1.05])),
+                text="sku_label:N",
+                color=alt.Color("policy:N", scale=color_scale),
+            )
+        )
+        st.altair_chart((points_tradeoff + labels_tradeoff).properties(height=380), use_container_width=True)
 
     with c_sc2:
         st.markdown("##### 🔍 Nhận định Đánh đổi Thực nghiệm")
