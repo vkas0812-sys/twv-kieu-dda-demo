@@ -13,11 +13,14 @@ sys.path[:0] = [str(_ROOT / "packages"), str(_ROOT / "apps"), str(_ROOT / "apps"
 import importlib
 import api.services.forecast_lab as _fl_mod
 import api.services.inventory_lab as _il_mod
+import api.services.procurement as _pr_mod
 importlib.reload(_fl_mod)
 importlib.reload(_il_mod)
+importlib.reload(_pr_mod)
 from api.services.forecast_lab import load_forecast_tables
 from api.services.inventory_lab import compare_hist_fcst, solve_protocol
-from api.services.paths import POLICIES, S4
+from api.services.procurement import calculate_procurement_plan
+from api.services.paths import CHANNELS, CHANNEL_LABELS, POLICIES, S4
 from api.services.runs import list_runs, read_run
 from bootstrap import (
     POLICY_COLOR,
@@ -196,11 +199,12 @@ if len(vp_sub) and len(dec_sub):
     diff_ex = float(dec_sub["TEC_ex_fulfill"].sum() - vp_sub["TEC_ex_fulfill"].sum())
     k4.metric("Tiết kiệm TEC_ex_fulfill (VP so với Dec)", vnd(diff_ex), f"Phân vùng: {target_split.upper()}")
 
-tab_res, tab_place, tab_cost, tab_rq2 = st.tabs([
+tab_res, tab_place, tab_cost, tab_rq2, tab_po = st.tabs([
     "📋 1. Bảng Kết quả Chi tiết (Train & OOS)",
     "🏗️ 2. Vị trí Đặt Tồn kho (y*) & Độ tập trung (CL / SA)",
     "💰 3. Cấu trúc Chi phí (Holding / Penalty / Fulfillment)",
     "⚖️ 4. Đối đầu Trực tiếp Lịch sử vs Dự báo (RQ2 Live)",
+    "📦 5. Kế hoạch Đặt hàng NCC & Chia Kênh (PO & MOQ 600)",
 ])
 
 with tab_res:
@@ -352,5 +356,194 @@ with tab_rq2:
                 st.warning(cmp.get("oos_note") or "no window")
             st.caption(cmp["caption"])
             st.dataframe(pd.DataFrame(cmp["rows"]), use_container_width=True, hide_index=True)
+
+with tab_po:
+    st.markdown("#### 📦 Kế Hoạch Đặt Hàng Nhà Cung Cấp Về Kho Trung Tâm (CIW) & Phân Bổ 5 Kênh Tiêu Thụ")
+    st.markdown(
+        "Ràng buộc nghiệp vụ thực tế: **1 thùng = 6 chai** (không xé lẻ thùng) • **MOQ Nhà cung cấp = 600 chai/chuyến hàng** (tương đương 100 thùng nguyên)."
+    )
+
+    po_pol_opts = sorted(list(set(rows["policy"].dropna())))
+    def_pol = "Kieu-DDA-VP" if "Kieu-DDA-VP" in po_pol_opts else (po_pol_opts[0] if po_pol_opts else "Kieu-DDA-VP")
+
+    po_c1, po_c2, po_c3, po_c4 = st.columns([1.4, 1.0, 1.0, 1.6])
+    with po_c1:
+        chosen_po_pol = st.selectbox(
+            "Cơ sở chính sách tồn kho:",
+            options=po_pol_opts,
+            index=po_pol_opts.index(def_pol) if def_pol in po_pol_opts else 0,
+            format_func=lambda p: POLICY_LABEL.get(p, p),
+        )
+    with po_c2:
+        po_split = st.selectbox("Phân vùng định mức:", options=["train", "oos"], format_func=lambda s: "Train (T1–T8)" if s == "train" else "OOS (T9–T12)")
+    with po_c3:
+        moq_input = st.number_input("MOQ Nhà cung cấp (chai):", min_value=0, max_value=20000, value=600, step=60)
+    with po_c4:
+        topup_strat = st.selectbox(
+            "Chiến lược xử lý khi thiếu MOQ (< 600 chai):",
+            options=["velocity", "proportional", "none"],
+            format_func=lambda x: {
+                "velocity": "🚀 Ưu tiên hàng bán chạy (Lớp AX/AY & Vòng quay)",
+                "proportional": "📊 Phân bổ theo tỷ trọng nhu cầu (Proportional)",
+                "none": "⚠️ Giữ nguyên & Báo thiếu MOQ",
+            }[x],
+        )
+
+    # Filter rows by policy and split
+    sel_rows = rows[(rows["policy"] == chosen_po_pol) & (rows["split"] == po_split)].copy()
+    if sel_rows.empty:
+        # Fallback to train if oos not available
+        sel_rows = rows[rows["policy"] == chosen_po_pol].copy()
+
+    # Optional On-hand stock input
+    with st.expander("📝 Điều chỉnh Tồn kho Khả dụng Hiện có (On-hand Stock) — Mặc định 0 chai cho đợt đặt hàng mới"):
+        st.caption("Nhập số lượng chai hiện có trong kho nếu muốn khấu trừ trước khi đặt hàng mới:")
+        stock_cols = st.columns(min(len(skus), 4) or 1)
+        on_hand_stocks: dict[str, float] = {}
+        for idx, s in enumerate(skus):
+            c = stock_cols[idx % len(stock_cols)]
+            on_hand_stocks[s] = c.number_input(f"Tồn kho {s} (chai):", min_value=0.0, value=0.0, step=6.0, key=f"on_hand_{s}")
+
+    # Calculate plan
+    plan = calculate_procurement_plan(
+        sel_rows.to_dict(orient="records"),
+        moq=int(moq_input),
+        pack_size=6,
+        topup_strategy=topup_strat,
+        current_stocks=on_hand_stocks,
+        baseline=baseline,
+    )
+
+    summary = plan["summary"]
+    items = plan["items"]
+
+    # Metric Row
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("MOQ Nhà cung cấp", f"{summary['moq_bottles']:,} chai", f"{summary['target_cartons']} thùng")
+    m2.metric("Nhu cầu cơ sở", f"{summary['base_bottles']:,} chai", f"{summary['base_cartons']} thùng")
+    m3.metric("Bù thiếu MOQ (Top-up)", f"+{summary['topup_cartons'] * 6:,} chai", f"+{summary['topup_cartons']} thùng")
+    m4.metric("Tổng Đặt về CIW", f"{summary['final_bottles']:,} chai", f"{summary['final_cartons']} thùng")
+    m5.metric("Tổng Giá trị Đơn hàng (PO)", vnd(summary["total_po_amount_vnd"]), f"{len(items)} SKU")
+
+    # Progress bar and status
+    prog_ratio = min(1.0, float(summary["final_bottles"]) / max(1, summary["moq_bottles"]))
+    st.progress(prog_ratio)
+
+    if summary["moq_met"]:
+        st.success(
+            f"✅ **Đạt chỉ tiêu MOQ Nhà cung cấp!** Tổng lượng đặt: **{summary['final_bottles']:,} chai** "
+            f"(= **{summary['final_cartons']} thùng nguyên**), vượt ngưỡng tối thiểu {summary['moq_bottles']:,} chai. Đủ điều kiện phát lệnh PO."
+        )
+    else:
+        st.warning(
+            f"⚠️ **Chưa đủ MOQ Nhà cung cấp!** Hiện có **{summary['final_bottles']:,} chai** ({summary['final_cartons']} thùng), "
+            f"còn thiếu **{summary['deficit_bottles']:,} chai** ({summary['deficit_cartons']} thùng) để đủ chuyến hàng {summary['moq_bottles']:,} chai. "
+            f"Hãy bật chiến lược *Ưu tiên hàng bán chạy* ở trên hoặc chọn thêm SKU vào giỏ."
+        )
+
+    # Table 1: PO to Supplier
+    st.markdown("##### 📑 1. Chi Tiết Đơn Đặt Hàng Nhà Cung Cấp Về Kho Trung Tâm (CIW)")
+    po_records = []
+    for it in items:
+        po_records.append({
+            "Mã SKU": it["sku"],
+            "Tên sản phẩm": it["item_name"],
+            "Lớp": it["ABC"],
+            "Định mức y* (chai)": round(it["target_y"], 1),
+            "Tồn hiện có (chai)": int(it["current_stock"]),
+            "Nhu cầu ròng (chai)": round(it["net_requirement"], 1),
+            "Thùng cơ sở": it["base_cartons"],
+            "Thùng bù MOQ": it["topup_cartons"],
+            "Tổng thùng đặt (Cartons)": it["final_cartons"],
+            "Tổng chai đặt (Bottles)": it["final_bottles"],
+            "Đơn giá COGS (VND)": it["unit_cost_vnd"],
+            "Thành tiền PO (VND)": it["po_amount_vnd"],
+        })
+    df_po = pd.DataFrame(po_records)
+    st.dataframe(
+        df_po,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Định mức y* (chai)": st.column_config.NumberColumn(format="%.1f"),
+            "Nhu cầu ròng (chai)": st.column_config.NumberColumn(format="%.1f"),
+            "Thùng cơ sở": st.column_config.NumberColumn(format="%d thùng"),
+            "Thùng bù MOQ": st.column_config.NumberColumn(format="+%d thùng"),
+            "Tổng thùng đặt (Cartons)": st.column_config.NumberColumn(format="%d thùng"),
+            "Tổng chai đặt (Bottles)": st.column_config.NumberColumn(format="%,d chai"),
+            "Đơn giá COGS (VND)": st.column_config.NumberColumn(format="%,.0f đ"),
+            "Thành tiền PO (VND)": st.column_config.NumberColumn(format="%,.0f đ"),
+        },
+    )
+
+    po_csv = df_po.to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        "📥 Tải File Đơn Đặt Hàng PO (CSV)",
+        data=po_csv,
+        file_name="TWV_Purchase_Order_MOQ600.csv",
+        mime="text/csv",
+    )
+
+    # Table 2: Channel Allocation
+    st.markdown("##### 🚚 2. Kế Hoạch Phân Bổ Điều Phối Về 5 Kênh Tiêu Thụ (Dual-Hub Allocation)")
+    st.caption("Nguyên tắc: Mỗi kênh nhận số thùng nguyên (bội số 6 chai), không xé lẻ, tổng số thùng các kênh bằng đúng tổng số thùng nhập về.")
+
+    ch_records = []
+    for it in items:
+        rec = {
+            "Mã SKU": it["sku"],
+            "Tên sản phẩm": it["item_name"],
+            "Lớp": it["ABC"],
+            "Tổng thùng": it["final_cartons"],
+            "Tổng chai": it["final_bottles"],
+        }
+        for ch in CHANNELS:
+            c_k = it["channel_cartons"].get(ch, 0)
+            c_b = it["channel_bottles"].get(ch, 0)
+            rec[f"{ch} (Thùng)"] = c_k
+            rec[f"{ch} (Chai)"] = c_b
+        ch_records.append(rec)
+
+    # Add Total summary row
+    tot_rec = {
+        "Mã SKU": "TỔNG CỘNG",
+        "Tên sản phẩm": f"Toàn bộ {len(items)} SKU",
+        "Lớp": "—",
+        "Tổng thùng": summary["final_cartons"],
+        "Tổng chai": summary["final_bottles"],
+    }
+    for ch in CHANNELS:
+        tot_rec[f"{ch} (Thùng)"] = summary["channel_totals_cartons"].get(ch, 0)
+        tot_rec[f"{ch} (Chai)"] = summary["channel_totals_bottles"].get(ch, 0)
+    ch_records.append(tot_rec)
+
+    df_ch = pd.DataFrame(ch_records)
+    st.dataframe(
+        df_ch,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Tổng thùng": st.column_config.NumberColumn(format="%d thùng"),
+            "Tổng chai": st.column_config.NumberColumn(format="%,d chai"),
+            "RT (Thùng)": st.column_config.NumberColumn(format="%d thùng"),
+            "RT (Chai)": st.column_config.NumberColumn(format="%,d chai"),
+            "HO (Thùng)": st.column_config.NumberColumn(format="%d thùng"),
+            "HO (Chai)": st.column_config.NumberColumn(format="%,d chai"),
+            "HC (Thùng)": st.column_config.NumberColumn(format="%d thùng"),
+            "HC (Chai)": st.column_config.NumberColumn(format="%,d chai"),
+            "GT (Thùng)": st.column_config.NumberColumn(format="%d thùng"),
+            "GT (Chai)": st.column_config.NumberColumn(format="%,d chai"),
+            "MT (Thùng)": st.column_config.NumberColumn(format="%d thùng"),
+            "MT (Chai)": st.column_config.NumberColumn(format="%,d chai"),
+        },
+    )
+
+    ch_csv = df_ch.to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        "📥 Tải Bảng Phân Bổ 5 Kênh (CSV)",
+        data=ch_csv,
+        file_name="TWV_Channel_Allocation_Plan.csv",
+        mime="text/csv",
+    )
 
 caption(out.get("period_label", ""), out.get("omega_type", ""), out.get("L"), "2024-08", out.get("n_sku", 0))
