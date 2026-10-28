@@ -226,8 +226,15 @@ with tab2:
     totals_row.name = "TỔNG TOÀN BỘ"
     matrix_with_totals = pd.concat([matrix_with_totals, pd.DataFrame(totals_row).T])
 
+    try:
+        styled_matrix = matrix_with_totals.style.format("{:,.0f}").background_gradient(
+            cmap="Blues", subset=CHANNELS
+        )
+    except Exception:
+        styled_matrix = matrix_with_totals.style.format("{:,.0f}")
+
     st.dataframe(
-        matrix_with_totals.style.format("{:,.0f}").background_gradient(cmap="Blues", subset=CHANNELS),
+        styled_matrix,
         use_container_width=True,
         height=400,
     )
