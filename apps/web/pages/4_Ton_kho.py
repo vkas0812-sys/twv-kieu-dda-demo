@@ -546,4 +546,177 @@ with tab_po:
         mime="text/csv",
     )
 
+    st.markdown("---")
+    st.markdown("##### 📊 3. Phân Tích Trực Quan Nghiệp Vụ Tồn Kho & Điều Phối (Visual Inventory Analytics)")
+
+    # Row 1: PO Decomposition & ABC Value Allocation
+    r1_col1, r1_col2 = st.columns([1.1, 0.9])
+
+    with r1_col1:
+        st.markdown("**Biểu đồ 1: Cơ Cấu Đặt Hàng & Hiệu Ứng Bù MOQ 600 Chai (Decomposition)**")
+        st.caption("Tách bạch rõ số thùng đáp ứng nhu cầu gốc (y*) và số thùng bổ sung thêm để đạt MOQ của nhà cung cấp.")
+        decomp_rows = []
+        for it in items:
+            decomp_rows.append({
+                "sku_label": f"{it['sku']} ({it['ABC']})",
+                "item_name": it["item_name"],
+                "Cấu phần": "1. Thùng cơ sở (Nhu cầu y*)",
+                "Số thùng": it["base_cartons"],
+                "Số chai": it["base_bottles"],
+            })
+            if it["topup_cartons"] > 0:
+                decomp_rows.append({
+                    "sku_label": f"{it['sku']} ({it['ABC']})",
+                    "item_name": it["item_name"],
+                    "Cấu phần": "2. Thùng bù MOQ (+Top-up)",
+                    "Số thùng": it["topup_cartons"],
+                    "Số chai": it["topup_cartons"] * 6,
+                })
+        df_decomp = pd.DataFrame(decomp_rows)
+        if not df_decomp.empty:
+            c_decomp = (
+                alt.Chart(df_decomp)
+                .mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
+                .encode(
+                    x=alt.X("sku_label:N", title="Mã SKU (Phân lớp)", sort=None),
+                    y=alt.Y("Số thùng:Q", title="Số thùng đặt hàng (Cartons)"),
+                    color=alt.Color(
+                        "Cấu phần:N",
+                        scale=alt.Scale(range=["#2563eb", "#f59e0b"]),
+                        legend=alt.Legend(title="Cấu phần PO", orient="bottom"),
+                    ),
+                    tooltip=[
+                        alt.Tooltip("sku_label:N", title="SKU"),
+                        alt.Tooltip("item_name:N", title="Sản phẩm"),
+                        alt.Tooltip("Cấu phần:N", title="Phân loại"),
+                        alt.Tooltip("Số thùng:Q", title="Số thùng", format=",d"),
+                        alt.Tooltip("Số chai:Q", title="Số chai", format=",d"),
+                    ],
+                )
+                .properties(height=320)
+            )
+            st.altair_chart(c_decomp, use_container_width=True)
+
+    with r1_col2:
+        st.markdown("**Biểu đồ 2: Cơ Cấu Giá Trị Vốn PO theo Phân Lớp ABC-XYZ**")
+        st.caption("Kiểm soát rủi ro vốn lưu động: Đảm bảo phần lớn vốn tập trung vào hàng bán chạy (Lớp A/B), hạn chế kẹt vốn ở lớp C.")
+        abc_val_rows = []
+        for it in items:
+            abc_val_rows.append({
+                "ABC": it["ABC"],
+                "Giá trị PO (VND)": it["po_amount_vnd"],
+                "Số thùng": it["final_cartons"],
+                "Số chai": it["final_bottles"],
+            })
+        df_abc_raw = pd.DataFrame(abc_val_rows)
+        if not df_abc_raw.empty:
+            df_abc = df_abc_raw.groupby("ABC", as_index=False).sum()
+            tot_val_po = max(1.0, float(df_abc["Giá trị PO (VND)"].sum()))
+            df_abc["Tỷ trọng vốn (%)"] = (df_abc["Giá trị PO (VND)"] / tot_val_po) * 100
+            c_abc = (
+                alt.Chart(df_abc)
+                .mark_bar(cornerRadiusTopRight=4, cornerRadiusBottomRight=4)
+                .encode(
+                    y=alt.Y("ABC:N", title="Phân lớp ABC-XYZ", sort="-x"),
+                    x=alt.X("Giá trị PO (VND):Q", title="Thành tiền PO (VND)"),
+                    color=alt.Color(
+                        "ABC:N",
+                        scale=alt.Scale(
+                            domain=["AX", "AY", "AZ", "BX", "BY", "BZ", "CX", "CY", "CZ"],
+                            range=["#10b981", "#34d399", "#6ee7b7", "#3b82f6", "#60a5fa", "#93c5fd", "#f59e0b", "#fbbf24", "#ef4444"],
+                        ),
+                        legend=None,
+                    ),
+                    tooltip=[
+                        alt.Tooltip("ABC:N", title="Phân lớp"),
+                        alt.Tooltip("Giá trị PO (VND):Q", title="Thành tiền PO", format=",.0f"),
+                        alt.Tooltip("Tỷ trọng vốn (%):Q", title="Tỷ trọng vốn (%)", format=".1f"),
+                        alt.Tooltip("Số thùng:Q", title="Tổng thùng", format=",d"),
+                        alt.Tooltip("Số chai:Q", title="Tổng chai", format=",d"),
+                    ],
+                )
+                .properties(height=320)
+            )
+            st.altair_chart(c_abc, use_container_width=True)
+
+    # Row 2: Channel Fulfillment Stacked & Logistics Heatmap
+    r2_col1, r2_col2 = st.columns([1.1, 0.9])
+
+    ch_alloc_rows = []
+    for it in items:
+        tot_k = max(1, it["final_cartons"])
+        for ch in CHANNELS:
+            k = it["channel_cartons"].get(ch, 0)
+            ch_alloc_rows.append({
+                "sku_label": f"{it['sku']} ({it['ABC']})",
+                "item_name": it["item_name"],
+                "Kênh": f"{ch} — {CHANNEL_LABELS.get(ch, ch).split('(')[-1].replace(')', '')}",
+                "ch_code": ch,
+                "Số thùng": k,
+                "Số chai": k * 6,
+                "Tỷ trọng (%)": (k / tot_k) * 100,
+            })
+    df_ch_alloc = pd.DataFrame(ch_alloc_rows)
+
+    with r2_col1:
+        st.markdown("**Biểu đồ 3: Phân Bổ Số Thùng Nguyên Về 5 Kênh Tiêu Thụ**")
+        st.caption("Xem tỷ trọng phân bổ hàng theo từng kênh (B2C: Retail, Home vs B2B: HoReCa, Đại lý, Siêu thị).")
+        if not df_ch_alloc.empty:
+            c_ch_stack = (
+                alt.Chart(df_ch_alloc)
+                .mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
+                .encode(
+                    x=alt.X("sku_label:N", title="Mã SKU (Phân lớp)", sort=None),
+                    y=alt.Y("Số thùng:Q", title="Số thùng phân bổ (Cartons)"),
+                    color=alt.Color(
+                        "Kênh:N",
+                        scale=alt.Scale(range=["#059669", "#10b981", "#3b82f6", "#6366f1", "#8b5cf6"]),
+                        legend=alt.Legend(title="Kênh tiêu thụ", orient="bottom"),
+                    ),
+                    tooltip=[
+                        alt.Tooltip("sku_label:N", title="SKU"),
+                        alt.Tooltip("item_name:N", title="Sản phẩm"),
+                        alt.Tooltip("Kênh:N", title="Kênh tiêu thụ"),
+                        alt.Tooltip("Số thùng:Q", title="Số thùng", format=",d"),
+                        alt.Tooltip("Số chai:Q", title="Số chai", format=",d"),
+                        alt.Tooltip("Tỷ trọng (%):Q", title="Tỷ trọng (%)", format=".1f"),
+                    ],
+                )
+                .properties(height=340)
+            )
+            st.altair_chart(c_ch_stack, use_container_width=True)
+
+    with r2_col2:
+        st.markdown("**Biểu đồ 4: Bản Đồ Nhiệt Điều Phối Kho Vận (Dispatch Heatmap)**")
+        st.caption("Bản đồ ma trận trực quan cho Trưởng kho và Điều vận: Nhìn nhanh khối lượng thùng cần xuất về từng kênh.")
+        if not df_ch_alloc.empty:
+            df_heat = df_ch_alloc.copy()
+            df_heat["Nhãn thùng"] = df_heat["Số thùng"].apply(lambda v: f"{v} th" if v > 0 else "")
+            max_heat = max(1, df_heat["Số thùng"].max())
+
+            heat_base = alt.Chart(df_heat).encode(
+                x=alt.X("ch_code:N", title="Kênh Tiêu Thụ", sort=CHANNELS),
+                y=alt.Y("sku_label:N", title="Mã SKU", sort=None),
+            )
+            heatmap_rect = heat_base.mark_rect(cornerRadius=4).encode(
+                color=alt.Color(
+                    "Số thùng:Q",
+                    title="Số thùng",
+                    scale=alt.Scale(scheme="blues"),
+                ),
+                tooltip=[
+                    alt.Tooltip("sku_label:N", title="SKU"),
+                    alt.Tooltip("item_name:N", title="Sản phẩm"),
+                    alt.Tooltip("ch_code:N", title="Kênh"),
+                    alt.Tooltip("Số thùng:Q", title="Số thùng nguyên", format=",d"),
+                    alt.Tooltip("Số chai:Q", title="Số chai", format=",d"),
+                ],
+            )
+            heatmap_text = heat_base.mark_text(baseline="middle", fontSize=12, fontWeight="bold").encode(
+                text="Nhãn thùng:N",
+                color=alt.condition(alt.datum["Số thùng"] > max_heat * 0.55, alt.value("#ffffff"), alt.value("#1e293b")),
+            )
+            c_heatmap = (heatmap_rect + heatmap_text).properties(height=340)
+            st.altair_chart(c_heatmap, use_container_width=True)
+
 caption(out.get("period_label", ""), out.get("omega_type", ""), out.get("L"), "2024-08", out.get("n_sku", 0))
