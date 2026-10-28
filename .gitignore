@@ -7,3 +7,4 @@ __pycache__/
 .venv/
 venv/
 data/parquet/sales_upload.parquet
+data/results/app_runs/

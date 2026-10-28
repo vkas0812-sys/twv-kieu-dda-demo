@@ -1,0 +1,37 @@
+{
+  "notebook": "03d_dda_leadtime.ipynb",
+  "layer": "C1-L3",
+  "S4": [
+    "W100133",
+    "W103028",
+    "W131012",
+    "W100627"
+  ],
+  "n_pilot": 44,
+  "RUN_TOP40": true,
+  "N_TOP40": 40,
+  "S4_class": {
+    "W100133": "AX",
+    "W103028": "AY",
+    "W131012": "BY",
+    "W100627": "CZ"
+  },
+  "L_LIST": [
+    3,
+    4,
+    5,
+    6
+  ],
+  "mu_rule": "sum_forecast_L_plus_e_window",
+  "forecast_layer": "phase3_s4",
+  "cutoff": "2024-08",
+  "LGB_OK": true,
+  "phase3_rule": "AX-Hybrid|AY-TES|A-SARIMA|B-EnsembleLGB|C-MA4|CZ-Hier",
+  "seed": 42,
+  "do_not_touch": [
+    "03_dump",
+    "03a_align_*.csv",
+    "03b_leadtime_*.csv",
+    "03c_*.csv"
+  ]
+}

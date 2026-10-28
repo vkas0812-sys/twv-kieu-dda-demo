@@ -1,0 +1,9 @@
+parameter,value,status
+Top-40 source,03d pilot order excluding fixed S4,observed
+Base-stock target,03d fcst_joint / L=3 / DDA-VP / total_y,observed
+Channel allocation basis,"yhat_best, Sep-Nov 2024",observed
+Case pack,6,user-specified
+Supplier MOQ,600,user-specified
+Supplier mapping,not supplied,unmapped lower bound
+Inventory snapshot,not supplied,gross target (inventory snapshot absent)
+MOQ bound check,True,validated
