@@ -1,0 +1,2 @@
+supplier_id,sku_count,pre_moq_cases,final_order_cases,moq_uplift_cases,pre_moq_bottles,final_order_bottles,moq_compliant
+UNMAPPED_PORTFOLIO,40,15592,15592,0,93552,93552,True

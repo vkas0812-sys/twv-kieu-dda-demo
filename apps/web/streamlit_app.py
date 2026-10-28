@@ -85,7 +85,7 @@ try:
 except Exception as exc:
     st.warning(f"Không tải được danh mục COGS: {exc}")
 
-st.markdown("### 2. Kiến trúc 8 Phân hệ Chức năng (Click để truy cập nhanh)")
+st.markdown("### 2. Kiến trúc 11 Phân hệ Chức năng (Click để truy cập nhanh)")
 
 row1 = st.columns(4)
 with row1[0]:
@@ -192,3 +192,44 @@ with row2[3]:
         unsafe_allow_html=True,
     )
     st.page_link("pages/8_Phuong_phap.py", label="Mở Trang 8: Phương pháp & Biểu đồ →", icon="📐")
+
+row3 = st.columns(3)
+with row3[0]:
+    st.markdown(
+        """
+        <div class="twv-card">
+            <span class="twv-pill pill-dec">Module 09</span>
+            <h4>🎯 Phân tích EOQ Độc lập</h4>
+            <p style="font-size:0.86rem;color:#475569;">Quy mô đặt hàng kinh tế EOQ, so sánh chi phí thùng nguyên 6 chai, đường cong tổng chi phí TRC và đối chiếu MOQ.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.page_link("pages/9_EOQ.py", label="Mở Trang 9: Phân tích EOQ →", icon="🎯")
+
+with row3[1]:
+    st.markdown(
+        """
+        <div class="twv-card">
+            <span class="twv-pill pill-vp">Module 10</span>
+            <h4>📋 Báo cáo Luận văn & Quản trị Rủi ro</h4>
+            <p style="font-size:0.86rem;color:#475569;">Toàn diện 6 chương luận văn, ma trận đánh đổi Cost-Service, phân rã dòng thác PO Waterfall và khung quản trị rủi ro 3 tầng.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.page_link("pages/10_Bao_cao_luan_van.py", label="Mở Trang 10: Báo cáo Luận văn →", icon="📋")
+
+with row3[2]:
+    st.markdown(
+        """
+        <div class="twv-card">
+            <span class="twv-pill pill-fp">Module 11</span>
+            <h4>📦 Bổ sung Top-40 & Phân bổ 5 Kênh</h4>
+            <p style="font-size:0.86rem;color:#475569;">Ràng buộc nguyên thùng 6 chai, MOQ 600 chai nhà cung cấp, phân bổ 5 kênh và 27 biểu đồ phân tích 10 câu hỏi kinh tế.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.page_link("pages/11_Top40_Bo_sung_MOQ_Kenh.py", label="Mở Trang 11: Top-40 Replenishment →", icon="📦")
+
