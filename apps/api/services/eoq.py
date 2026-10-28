@@ -146,12 +146,11 @@ def calculate_eoq(
     target_moq_k = int(math.ceil(moq / pack_size)) if pack_size > 0 else 0
     moq_met_single = rec_q >= moq
 
-    # Calculate penalty if forced to order 600 standalone
-    q_moq = max(rec_q, moq)
-    oc_moq = (D / q_moq) * K
-    hc_moq = (q_moq / 2.0) * H
+    # Calculate costs strictly at MOQ batch size (600 bottles)
+    oc_moq = (D / moq) * K
+    hc_moq = (moq / 2.0) * H
     trc_moq = oc_moq + hc_moq
-    cost_penalty_moq = max(0.0, trc_moq - rec_trc)
+    cost_penalty_moq = max(0.0, trc_moq - rec_trc) if not moq_met_single else 0.0
 
     # 6. Cost Curves Generation (for plotting TRC, OC, HC vs Q)
     q_min = max(6, int(round(min(q_floor * 0.3, eoq_cont * 0.3))))
@@ -208,6 +207,8 @@ def calculate_eoq(
         "moq_met_single": moq_met_single,
         "moq_bottles": moq,
         "moq_cartons": target_moq_k,
+        "moq_ordering_cost": oc_moq,
+        "moq_holding_cost": hc_moq,
         "trc_at_moq": trc_moq,
         "cost_penalty_moq": cost_penalty_moq,
         "curve_points": curve_points,

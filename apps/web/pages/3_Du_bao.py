@@ -489,6 +489,26 @@ with tab_explain:
             else:
                 gains = list(raw_gain)
 
+            # Chẩn đoán Sức khỏe Mô hình LightGBM (Model Health & 1-Leaf Diagnostic)
+            tot_splits_actual = sum(splits)
+            h_c1, h_c2, h_c3, h_c4 = st.columns(4)
+            h_c1.metric("Mẫu Train", f"{art_data.get('n_train_samples', 32)} kỳ")
+            h_c2.metric("Sản lượng Train", f"{art_data.get('train_sum', 0):,.0f} chai")
+            h_c3.metric("Tổng Phân nhánh", f"{tot_splits_actual} splits")
+            h_c4.metric(
+                "Cấu trúc Cây",
+                "Đơn lá (1-Leaf)" if tot_splits_actual == 0 else "Đa nhánh (Tree)",
+            )
+
+            if tot_splits_actual == 0:
+                st.warning(
+                    "⚠️ **Chẩn đoán Sức khỏe Mô hình: Cây đơn lá (1-Leaf / Constant Intercept)**\n\n"
+                    "Do kích thước mẫu ngắn (32 tháng) và tham số chặn cỡ lá tối thiểu (`min_child_samples`), "
+                    "bộ cây LightGBM chưa phân nhánh mà hồi quy về giá trị trung bình nền Tweedie. "
+                    "Các giá trị Split = 0 và Gain = 0 dưới đây phản ánh trạng thái này, "
+                    "**tuyệt đối không suy diễn thành các đặc trưng không có ảnh hưởng đến thị trường**."
+                )
+
             imp_df = pd.DataFrame({
                 "Feature": feats,
                 "Split": splits,

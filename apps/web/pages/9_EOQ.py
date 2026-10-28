@@ -62,7 +62,8 @@ with c1:
 
 # Fetch historical 2024 annual demand for reference
 hist_df = monthly_qty(baseline, [selected_sku], year=2024)
-hist_annual_demand = float(hist_df["Quantity"].sum()) if not hist_df.empty else 1200.0
+has_hist_data = not hist_df.empty and float(hist_df["Quantity"].sum()) > 0
+hist_annual_demand = float(hist_df["Quantity"].sum()) if has_hist_data else 0.0
 cogs_val = unit_cost(selected_sku)
 
 with c2:
@@ -72,6 +73,8 @@ with c2:
         horizontal=True,
     )
     if demand_mode.startswith("Lịch sử"):
+        if not has_hist_data:
+            st.warning("⚠️ Không có dữ liệu lịch sử năm 2024 cho SKU này. Nhu cầu bằng 0 chai/năm. Vui lòng chuyển sang 'Nhập thủ công' để lập kế hoạch.")
         D_input = st.number_input(
             "Nhu cầu năm D (chai/năm):",
             min_value=0.0,
@@ -83,7 +86,7 @@ with c2:
         D_input = st.number_input(
             "Nhu cầu năm D (chai/năm):",
             min_value=0.0,
-            value=float(hist_annual_demand) if hist_annual_demand > 0 else 1200.0,
+            value=float(hist_annual_demand) if has_hist_data else 600.0,
             step=60.0,
         )
 
@@ -212,8 +215,8 @@ else:
             "Phương án": "4. Ngưỡng MOQ Đơn lẻ (100 thùng = 600 chai)",
             "Số thùng": f"{res['moq_cartons']} th",
             "Số chai": f"{res['moq_bottles']:,}",
-            "Chi phí Đặt hàng (VND/năm)": (res['D'] / res['moq_bottles']) * res['K'],
-            "Chi phí Lưu kho (VND/năm)": (res['moq_bottles'] / 2.0) * res['H'],
+            "Chi phí Đặt hàng (VND/năm)": res['moq_ordering_cost'],
+            "Chi phí Lưu kho (VND/năm)": res['moq_holding_cost'],
             "Tổng chi phí TRC (VND/năm)": res['trc_at_moq'],
             "Chênh lệch chi phí": (
                 f"+{vnd(res['cost_penalty_moq'])} (+{((res['trc_at_moq']/res['total_relevant_cost'])-1)*100:.1f}%)"
