@@ -164,10 +164,10 @@ with tab_tradeoff:
     with c_sc1:
         tradeoff_plot = (
             alt.Chart(inv_df)
-            .mark_circle(size=120)
+            .mark_point(filled=True, size=160)
             .encode(
                 x=alt.X("cost_per_unit:Q", title="Chi phí Đơn vị (VND/chai)", scale=alt.Scale(zero=False)),
-                y=alt.Y("fill_rate:Q", title="Tỷ lệ Phục vụ (Fill Rate)", scale=alt.Scale(domain=[0.8, 1.02])),
+                y=alt.Y("fill_rate:Q", title="Tỷ lệ Phục vụ (Fill Rate)", scale=alt.Scale(domain=[0.35, 1.05])),
                 color=alt.Color("policy:N", title="Chính sách Tồn kho"),
                 shape=alt.Shape("ABC:N", title="Phân khúc"),
                 tooltip=[
@@ -192,6 +192,27 @@ with tab_tradeoff:
             "• **Vốn lưu động (Working Capital):** Phương án SAA Pooling giúp giảm 12% - 20% lượng vốn tồn kho bị đóng băng so với việc trữ tồn riêng rẽ tại từng đại lý."
         )
 
+    st.markdown("##### 📊 So sánh Trực quan Tổng Chi phí Kỳ vọng (TEC) & Vốn Lưu động (WC)")
+    tec_bar = (
+        alt.Chart(inv_df)
+        .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
+        .encode(
+            x=alt.X("sku:N", title="Mã SKU Đại diện (S4)"),
+            xOffset=alt.XOffset("policy:N"),
+            y=alt.Y("TEC:Q", title="Tổng Chi phí Kỳ vọng TEC (VND)"),
+            color=alt.Color("policy:N", title="Chính sách"),
+            tooltip=[
+                alt.Tooltip("sku:N", title="SKU"),
+                alt.Tooltip("policy:N", title="Chính sách"),
+                alt.Tooltip("TEC:Q", title="TEC", format=",.0f đ"),
+                alt.Tooltip("fill_rate:Q", title="Fill Rate", format=".1%"),
+                alt.Tooltip("WC:Q", title="Vốn lưu động", format=",.0f đ"),
+            ],
+        )
+        .properties(height=280)
+    )
+    st.altair_chart(tec_bar, use_container_width=True)
+
 # -------------------------------------------------------------
 # TAB 3: WATERFALL PO BREAKDOWN
 # -------------------------------------------------------------
@@ -214,26 +235,44 @@ with tab_waterfall:
     wf_res = calculate_po_waterfall(wf_sku, wf_target, wf_onhand, 0.0, pack_size=6, moq=600)
 
     wf_data = pd.DataFrame([
-        {"Giai đoạn": "1. Mức tồn mục tiêu (y*)", "Giá trị": wf_res["target_y"], "Loại": "Base Target"},
-        {"Giai đoạn": "2. Khấu trừ Tồn khả dụng", "Giá trị": -wf_res["available_inv"], "Loại": "Deduction"},
-        {"Giai đoạn": "3. Nhu cầu Mua ròng", "Giá trị": wf_res["net_requirement"], "Loại": "Net Demand"},
-        {"Giai đoạn": "4. Tăng do Quy cách Thùng (6)", "Giá trị": wf_res["carton_bottles"] - wf_res["net_requirement"], "Loại": "Carton Rounding"},
-        {"Giai đoạn": "5. Bù Ngưỡng MOQ (600)", "Giá trị": wf_res["moq_topup"], "Loại": "MOQ Top-up"},
-        {"Giai đoạn": "6. Lệnh PO Cuối cùng", "Giá trị": wf_res["final_po"], "Loại": "Final PO"},
+        {"stage": "1. Mục tiêu y*", "value": wf_res["target_y"], "component": "1. Base Target", "label": f"+{wf_res['target_y']:,.0f}"},
+        {"stage": "2. Trừ tồn kho", "value": -wf_res["available_inv"], "component": "2. Khấu trừ tồn", "label": f"-{wf_res['available_inv']:,.0f}"},
+        {"stage": "3. Mua ròng", "value": wf_res["net_requirement"], "component": "3. Nhu cầu ròng", "label": f"={wf_res['net_requirement']:,.0f}"},
+        {"stage": "4. Thùng nguyên", "value": max(0.0, wf_res["carton_bottles"] - wf_res["net_requirement"]), "component": "4. Đóng thùng (+pack)", "label": f"+{max(0.0, wf_res['carton_bottles'] - wf_res['net_requirement']):,.0f}"},
+        {"stage": "5. Bù MOQ", "value": float(wf_res["moq_topup"]), "component": "5. Bù MOQ (+600)", "label": f"+{wf_res['moq_topup']:,.0f}"},
+        {"stage": "6. Lệnh PO", "value": float(wf_res["final_po"]), "component": "6. PO Cuối cùng", "label": f"={wf_res['final_po']:,} chai"},
     ])
 
-    wf_chart = (
-        alt.Chart(wf_data)
-        .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
-        .encode(
-            x=alt.X("Giai đoạn:N", sort=None, title="Các bước Phân rã Nghiệp vụ"),
-            y=alt.Y("Giá trị:Q", title="Sản lượng (chai)"),
-            color=alt.Color("Loại:N", title="Thành phần"),
-            tooltip=["Giai đoạn", alt.Tooltip("Giá trị:Q", format=",.1f chai")],
-        )
-        .properties(height=320)
+    base_wf = alt.Chart(wf_data).encode(
+        x=alt.X("stage:N", sort=None, title="Các bước Phân rã Nghiệp vụ", axis=alt.Axis(labelAngle=0, labelFontSize=12)),
     )
-    st.altair_chart(wf_chart, use_container_width=True)
+    bars_wf = base_wf.mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3).encode(
+        y=alt.Y("value:Q", title="Sản lượng (chai)", stack=None),
+        color=alt.Color(
+            "component:N",
+            title="Thành phần",
+            scale=alt.Scale(
+                domain=["1. Base Target", "2. Khấu trừ tồn", "3. Nhu cầu ròng", "4. Đóng thùng (+pack)", "5. Bù MOQ (+600)", "6. PO Cuối cùng"],
+                range=["#3b82f6", "#ef4444", "#10b981", "#f59e0b", "#8b5cf6", "#06b6d4"],
+            ),
+        ),
+        tooltip=[
+            alt.Tooltip("stage:N", title="Giai đoạn"),
+            alt.Tooltip("value:Q", title="Sản lượng", format=",.1f chai"),
+            alt.Tooltip("component:N", title="Ý nghĩa"),
+        ],
+    )
+    text_wf = base_wf.mark_text(
+        align="center",
+        baseline="bottom",
+        dy=-6,
+        fontSize=12,
+        fontWeight="bold",
+    ).encode(
+        y=alt.Y("value:Q", stack=None),
+        text="label:N",
+    )
+    st.altair_chart((bars_wf + text_wf).properties(height=340), use_container_width=True)
 
     c_wf1, c_wf2, c_wf3, c_wf4 = st.columns(4)
     c_wf1.metric("Nhu cầu Mua ròng", f"{wf_res['net_requirement']:,.0f} chai")
