@@ -475,13 +475,27 @@ with tab_explain:
                 f"Bạn có thể nhấn nút **🚀 Chạy Động cơ Dự báo M4** ở Tab 1 để sinh phiên mới kèm đầy đủ artifact giải thích."
             )
         else:
+            feats = art_data.get("features", [])
+            raw_split = art_data.get("importance_split", {})
+            raw_gain = art_data.get("importance_gain", {})
+
+            if isinstance(raw_split, dict):
+                splits = [raw_split.get(f, 0) for f in feats]
+            else:
+                splits = list(raw_split)
+
+            if isinstance(raw_gain, dict):
+                gains = [raw_gain.get(f, 0.0) for f in feats]
+            else:
+                gains = list(raw_gain)
+
             imp_df = pd.DataFrame({
-                "Feature": art_data["features"],
-                "Split": art_data["importance_split"],
-                "Gain": art_data["importance_gain"],
+                "Feature": feats,
+                "Split": splits,
+                "Gain": gains,
             })
-            tot_split = max(1, sum(art_data["importance_split"]))
-            tot_gain = max(1e-6, sum(art_data["importance_gain"]))
+            tot_split = max(1, sum(splits))
+            tot_gain = max(1e-6, sum(gains))
             imp_df["Tỷ trọng Split (%)"] = (imp_df["Split"] / tot_split) * 100.0
             imp_df["Tỷ trọng Gain (%)"] = (imp_df["Gain"] / tot_gain) * 100.0
 
