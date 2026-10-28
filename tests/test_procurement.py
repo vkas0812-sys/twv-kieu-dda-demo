@@ -70,3 +70,27 @@ def test_procurement_plan_no_topup():
     assert summary["deficit_cartons"] > 0
     assert summary["deficit_bottles"] > 0
     assert summary["final_bottles"] < 600
+
+
+def test_procurement_plan_per_sku_moq_w102705():
+    # User's exact scenario: W102705 with y*=544.7, 0 on hand
+    sku_rows = [
+        {"sku": "W102705", "item_name": "Cantine Ronco Romance", "ABC": "AY", "total_y": 544.7, "policy": "Kieu-DDA-VP"},
+    ]
+    res = calculate_procurement_plan(sku_rows, moq=600, pack_size=6, moq_level="sku", topup_strategy="velocity")
+    item = res["items"][0]
+
+    # Base: ceil(544.7 / 6) = 91 cartons = 546 bottles
+    assert item["base_cartons"] == 91
+    assert item["base_bottles"] == 546
+
+    # Must be topped up to 100 cartons = 600 bottles
+    assert item["topup_cartons"] == 9
+    assert item["final_cartons"] == 100
+    assert item["final_bottles"] == 600
+    assert item["moq_met"] is True
+    assert sum(item["channel_cartons"].values()) == 100
+    assert sum(item["channel_bottles"].values()) == 600
+    for ch, b in item["channel_bottles"].items():
+        assert b % 6 == 0
+

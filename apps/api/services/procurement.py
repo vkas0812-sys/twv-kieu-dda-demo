@@ -3,8 +3,8 @@
 Calculates purchase order quantities (PO) to Central Imported Warehouse (CIW)
 and downstream fulfillment allocation to 5 distribution channels (RT, HO, HC, GT, MT),
 enforcing:
-1. Strict integer pack size constraint: 6 bottles/carton (no broken cartons).
-2. Supplier-specific Minimum Order Quantity (MOQ): >= 600 bottles (>= 100 cartons) per shipment.
+1. Strict integer pack size constraint: 6 bottles/carton (strictly 1 single SKU per carton, no mixed-SKU cartons, no broken cartons).
+2. Minimum Order Quantity (MOQ): >= 600 bottles (>= 100 cartons), configurable per-SKU (default) or per-shipment.
 3. Top-up heuristics when initial demand is below MOQ (priority by ABC-XYZ velocity or proportional),
    strictly avoiding overstocking SKUs that already have zero net demand.
 4. Conservation of integer cartons across channels using the Largest Remainder Method (Hare-Niemeyer).
@@ -33,6 +33,7 @@ ABC_PRIORITY = {
 }
 
 VALID_STRATEGIES = {"velocity", "proportional", "none"}
+VALID_MOQ_LEVELS = {"sku", "shipment"}
 
 
 def allocate_cartons_to_channels(
@@ -40,7 +41,7 @@ def allocate_cartons_to_channels(
     channel_weights: dict[str, float],
     channels: list[str] = CHANNELS,
 ) -> dict[str, int]:
-    """Distribute integer cartons to channels using Largest Remainder (Hare-Niemeyer).
+    """Distribute integer cartons of a single SKU to channels using Largest Remainder (Hare-Niemeyer).
 
     Guarantees:
     - sum(result.values()) == total_cartons exactly.
@@ -123,6 +124,7 @@ def calculate_procurement_plan(
     current_stocks: dict[str, float] | None = None,
     baseline: str = "preclean",
     split: str = "train",
+    moq_level: str = "sku",
 ) -> dict[str, Any]:
     """Calculate procurement order quantities and channel allocations.
 
@@ -131,9 +133,9 @@ def calculate_procurement_plan(
     sku_rows : list[dict]
         List of result dictionaries. Must contain 'sku'.
     moq : int
-        Minimum order quantity in bottles per supplier shipment (default 600).
+        Minimum order quantity in bottles (default 600).
     pack_size : int
-        Bottles per carton / thùng (strictly 6 for wine, no broken cartons).
+        Bottles per carton / thùng (strictly 6 for wine, 1 single SKU per carton).
     topup_strategy : str
         'velocity' (prioritize top ABC classes and high demand),
         'proportional' (distribute deficit proportionally to demand),
@@ -144,6 +146,9 @@ def calculate_procurement_plan(
         Data baseline for SKU lookups (default 'preclean').
     split : str
         Partition split ('train' or 'oos').
+    moq_level : str
+        'sku' (each ordered SKU must meet MOQ >= 600 bottles / 100 cartons) or
+        'shipment' (total supplier shipment must meet MOQ >= 600 bottles).
 
     Returns
     -------
@@ -155,6 +160,9 @@ def calculate_procurement_plan(
 
     if topup_strategy not in VALID_STRATEGIES:
         raise ValueError(f"Chiến lược top-up không hợp lệ: '{topup_strategy}'. Hợp lệ: {sorted(VALID_STRATEGIES)}")
+
+    if moq_level not in VALID_MOQ_LEVELS:
+        raise ValueError(f"moq_level phải là 'sku' hoặc 'shipment', nhận được: '{moq_level}'")
 
     moq = max(0, int(moq))
     target_cartons = int(math.ceil(moq / pack_size)) if pack_size > 0 else 0
@@ -218,6 +226,8 @@ def calculate_procurement_plan(
             "topup_cartons": 0,
             "final_cartons": base_k,
             "final_bottles": base_bottles,
+            "deficit_cartons": 0,
+            "moq_met": True,
             "unit_cost_vnd": cost,
             "po_amount_vnd": base_bottles * cost,
             "y_star": y_star,
@@ -233,6 +243,7 @@ def calculate_procurement_plan(
                 "moq_bottles": moq,
                 "pack_size": pack_size,
                 "target_cartons": target_cartons,
+                "moq_level": moq_level,
                 "base_cartons": 0,
                 "base_bottles": 0,
                 "topup_cartons": 0,
@@ -261,12 +272,15 @@ def calculate_procurement_plan(
             it["final_bottles"] = 0
             it["topup_cartons"] = 0
             it["po_amount_vnd"] = 0.0
+            it["moq_met"] = True
+            it["deficit_cartons"] = 0
 
         return {
             "summary": {
                 "moq_bottles": moq,
                 "pack_size": pack_size,
                 "target_cartons": target_cartons,
+                "moq_level": moq_level,
                 "base_cartons": 0,
                 "base_bottles": 0,
                 "topup_cartons": 0,
@@ -284,71 +298,136 @@ def calculate_procurement_plan(
             "items": items,
         }
 
-    # Group by supplier to evaluate MOQ per shipment
-    supplier_groups: dict[str, list[dict[str, Any]]] = {}
-    for it in items:
-        supplier_groups.setdefault(it["supplier_id"], []).append(it)
+    # =========================================================================
+    # CASE 1: PER-SKU MOQ (Every SKU with demand > 0 must meet MOQ >= 600 bottles)
+    # =========================================================================
+    if moq_level == "sku":
+        all_skus_met = True
+        total_deficit_cartons = 0
 
-    supplier_summaries: dict[str, dict[str, Any]] = {}
-    all_suppliers_met = True
-    total_deficit_cartons = 0
-
-    for supp_id, supp_items in supplier_groups.items():
-        supp_base_k = sum(it["base_cartons"] for it in supp_items)
-        supp_deficit_k = max(0, target_cartons - supp_base_k)
-
-        # Top-up is only allowed on SKUs that genuinely have net_requirement > 0 (not overstocked!)
-        eligible_items = [it for it in supp_items if it["net_requirement"] > 0]
-
-        if supp_deficit_k > 0 and eligible_items and topup_strategy != "none":
-            if topup_strategy == "proportional":
-                weights = {it["sku"]: max(1.0, float(it["base_cartons"])) for it in eligible_items}
-                topup_alloc = allocate_cartons_to_channels(
-                    supp_deficit_k, weights, channels=[it["sku"] for it in eligible_items]
-                )
-                for it in eligible_items:
-                    it["topup_cartons"] += topup_alloc.get(it["sku"], 0)
+        for it in items:
+            if it["net_requirement"] <= 0 or it["base_cartons"] <= 0:
+                it["topup_cartons"] = 0
+                it["final_cartons"] = 0
+                it["final_bottles"] = 0
+                it["po_amount_vnd"] = 0.0
+                it["moq_met"] = True
+                it["deficit_cartons"] = 0
             else:
-                # Velocity / ABC priority on eligible items
-                ranked = sorted(
-                    eligible_items, key=lambda it: (it["abc_rank"], -it["base_cartons"], it["sku"])
-                )
-                num_eligible = max(1, min(len(ranked), 4))
-                for i in range(supp_deficit_k):
-                    chosen = ranked[i % num_eligible]
-                    chosen["topup_cartons"] += 1
+                if it["base_cartons"] < target_cartons:
+                    deficit_k = target_cartons - it["base_cartons"]
+                    if topup_strategy != "none":
+                        # Auto top-up this SKU to 100 cartons (600 bottles)
+                        it["topup_cartons"] = deficit_k
+                        it["final_cartons"] = target_cartons
+                        it["final_bottles"] = target_cartons * pack_size
+                        it["po_amount_vnd"] = it["final_bottles"] * it["unit_cost_vnd"]
+                        it["deficit_cartons"] = 0
+                        it["moq_met"] = True
+                    else:
+                        it["topup_cartons"] = 0
+                        it["final_cartons"] = it["base_cartons"]
+                        it["final_bottles"] = it["base_bottles"]
+                        it["po_amount_vnd"] = it["final_bottles"] * it["unit_cost_vnd"]
+                        it["deficit_cartons"] = deficit_k
+                        it["moq_met"] = False
+                        all_skus_met = False
+                        total_deficit_cartons += deficit_k
+                else:
+                    it["topup_cartons"] = 0
+                    it["final_cartons"] = it["base_cartons"]
+                    it["final_bottles"] = it["base_bottles"]
+                    it["po_amount_vnd"] = it["final_bottles"] * it["unit_cost_vnd"]
+                    it["deficit_cartons"] = 0
+                    it["moq_met"] = True
 
-            for it in supp_items:
-                it["final_cartons"] = it["base_cartons"] + it["topup_cartons"]
-                it["final_bottles"] = it["final_cartons"] * pack_size
-                it["po_amount_vnd"] = it["final_bottles"] * it["unit_cost_vnd"]
+        supplier_summaries: dict[str, dict[str, Any]] = {}
+        for it in items:
+            s_id = it["supplier_id"]
+            if s_id not in supplier_summaries:
+                supplier_summaries[s_id] = {
+                    "supplier_id": s_id,
+                    "base_cartons": 0,
+                    "final_cartons": 0,
+                    "deficit_cartons": 0,
+                    "moq_met": True,
+                }
+            supplier_summaries[s_id]["base_cartons"] += it["base_cartons"]
+            supplier_summaries[s_id]["final_cartons"] += it["final_cartons"]
+            supplier_summaries[s_id]["deficit_cartons"] += it.get("deficit_cartons", 0)
+            if not it.get("moq_met", True):
+                supplier_summaries[s_id]["moq_met"] = False
 
-            supp_final_k = sum(it["final_cartons"] for it in supp_items)
-            supp_met = supp_final_k >= target_cartons
-            supp_deficit_k = max(0, target_cartons - supp_final_k)
-        else:
-            supp_final_k = sum(it["final_cartons"] for it in supp_items)
-            supp_met = supp_final_k >= target_cartons
+        all_suppliers_met = all_skus_met
+
+    # =========================================================================
+    # CASE 2: PER-SHIPMENT MOQ (Total supplier shipment must meet MOQ >= 600 bottles)
+    # =========================================================================
+    else:
+        supplier_groups: dict[str, list[dict[str, Any]]] = {}
+        for it in items:
+            supplier_groups.setdefault(it["supplier_id"], []).append(it)
+
+        supplier_summaries = {}
+        all_suppliers_met = True
+        total_deficit_cartons = 0
+
+        for supp_id, supp_items in supplier_groups.items():
+            supp_base_k = sum(it["base_cartons"] for it in supp_items)
+            supp_deficit_k = max(0, target_cartons - supp_base_k)
+
+            # Top-up is only allowed on SKUs that genuinely have net_requirement > 0 (not overstocked!)
+            eligible_items = [it for it in supp_items if it["net_requirement"] > 0]
+
+            if supp_deficit_k > 0 and eligible_items and topup_strategy != "none":
+                if topup_strategy == "proportional":
+                    weights = {it["sku"]: max(1.0, float(it["base_cartons"])) for it in eligible_items}
+                    topup_alloc = allocate_cartons_to_channels(
+                        supp_deficit_k, weights, channels=[it["sku"] for it in eligible_items]
+                    )
+                    for it in eligible_items:
+                        it["topup_cartons"] += topup_alloc.get(it["sku"], 0)
+                else:
+                    # Velocity / ABC priority on eligible items
+                    ranked = sorted(
+                        eligible_items, key=lambda it: (it["abc_rank"], -it["base_cartons"], it["sku"])
+                    )
+                    num_eligible = max(1, min(len(ranked), 4))
+                    for i in range(supp_deficit_k):
+                        chosen = ranked[i % num_eligible]
+                        chosen["topup_cartons"] += 1
+
+                for it in supp_items:
+                    it["final_cartons"] = it["base_cartons"] + it["topup_cartons"]
+                    it["final_bottles"] = it["final_cartons"] * pack_size
+                    it["po_amount_vnd"] = it["final_bottles"] * it["unit_cost_vnd"]
+
+                supp_final_k = sum(it["final_cartons"] for it in supp_items)
+                supp_met = supp_final_k >= target_cartons
+                supp_deficit_k = max(0, target_cartons - supp_final_k)
+            else:
+                supp_final_k = sum(it["final_cartons"] for it in supp_items)
+                supp_met = supp_final_k >= target_cartons
+                if not supp_met:
+                    all_suppliers_met = False
+
             if not supp_met:
                 all_suppliers_met = False
 
-        if not supp_met:
-            all_suppliers_met = False
-
-        total_deficit_cartons += supp_deficit_k
-        supplier_summaries[supp_id] = {
-            "supplier_id": supp_id,
-            "base_cartons": supp_base_k,
-            "final_cartons": supp_final_k,
-            "deficit_cartons": supp_deficit_k,
-            "moq_met": supp_met,
-        }
+            total_deficit_cartons += supp_deficit_k
+            supplier_summaries[supp_id] = {
+                "supplier_id": supp_id,
+                "base_cartons": supp_base_k,
+                "final_cartons": supp_final_k,
+                "deficit_cartons": supp_deficit_k,
+                "moq_met": supp_met,
+            }
 
     total_final_cartons = sum(it["final_cartons"] for it in items)
     total_final_bottles = sum(it["final_bottles"] for it in items)
     total_po_amount = sum(it["po_amount_vnd"] for it in items)
 
-    # Downstream channel allocation per SKU
+    # Downstream channel allocation per SKU (100% Single-SKU Cartons)
     channel_totals_cartons = {ch: 0 for ch in CHANNELS}
     channel_totals_bottles = {ch: 0 for ch in CHANNELS}
 
@@ -372,6 +451,7 @@ def calculate_procurement_plan(
         "moq_bottles": moq,
         "pack_size": pack_size,
         "target_cartons": target_cartons,
+        "moq_level": moq_level,
         "base_cartons": total_base_cartons,
         "base_bottles": total_base_cartons * pack_size,
         "topup_cartons": total_final_cartons - total_base_cartons,

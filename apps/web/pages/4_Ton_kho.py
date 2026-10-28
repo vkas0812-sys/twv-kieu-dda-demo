@@ -360,16 +360,17 @@ with tab_rq2:
 with tab_po:
     st.markdown("#### 📦 Kế Hoạch Đặt Hàng Nhà Cung Cấp Về Kho Trung Tâm (CIW) & Phân Bổ 5 Kênh Tiêu Thụ")
     st.markdown(
-        "Ràng buộc nghiệp vụ thực tế: **1 thùng = 6 chai** (không xé lẻ thùng) • **MOQ Nhà cung cấp = 600 chai/chuyến hàng** (tương đương 100 thùng nguyên)."
+        "Ràng buộc nghiệp vụ thực tế: **1 thùng = 6 chai** (100% thùng đơn SKU, không xé lẻ, không đóng thùng trộn) • "
+        "**MOQ Đặt hàng: Tối thiểu 600 chai (100 thùng nguyên)** áp dụng cho từng SKU phát sinh đơn."
     )
 
     po_pol_opts = sorted(list(set(rows["policy"].dropna())))
     def_pol = "Kieu-DDA-VP" if "Kieu-DDA-VP" in po_pol_opts else (po_pol_opts[0] if po_pol_opts else "Kieu-DDA-VP")
 
-    po_c1, po_c2, po_c3, po_c4 = st.columns([1.4, 1.0, 1.0, 1.6])
+    po_c1, po_c2, po_c3, po_c4, po_c5 = st.columns([1.2, 0.9, 0.9, 1.4, 1.6])
     with po_c1:
         chosen_po_pol = st.selectbox(
-            "Cơ sở chính sách tồn kho:",
+            "Cơ sở chính sách:",
             options=po_pol_opts,
             index=po_pol_opts.index(def_pol) if def_pol in po_pol_opts else 0,
             format_func=lambda p: POLICY_LABEL.get(p, p),
@@ -377,14 +378,21 @@ with tab_po:
     with po_c2:
         po_split = st.selectbox("Phân vùng định mức:", options=["train", "oos"], format_func=lambda s: "Train (T1–T8)" if s == "train" else "OOS (T9–T12)")
     with po_c3:
-        moq_input = st.number_input("MOQ Nhà cung cấp (chai):", min_value=0, max_value=20000, value=600, step=60)
+        moq_input = st.number_input("MOQ (chai):", min_value=0, max_value=20000, value=600, step=60)
     with po_c4:
+        moq_scope = st.selectbox(
+            "Quy mô áp dụng MOQ:",
+            options=["sku", "shipment"],
+            index=0,
+            format_func=lambda m: "📌 Từng SKU (Tối thiểu ≥ 600 chai/SKU)" if m == "sku" else "📦 Cả chuyến hàng (Tổng ≥ 600 chai)",
+        )
+    with po_c5:
         topup_strat = st.selectbox(
-            "Chiến lược xử lý khi thiếu MOQ (< 600 chai):",
+            "Xử lý khi thiếu MOQ (< 600 chai):",
             options=["velocity", "proportional", "none"],
             format_func=lambda x: {
-                "velocity": "🚀 Ưu tiên hàng bán chạy (Lớp AX/AY & Vòng quay)",
-                "proportional": "📊 Phân bổ theo tỷ trọng nhu cầu (Proportional)",
+                "velocity": "🚀 Tự động tăng đủ 600 chai (100 thùng)",
+                "proportional": "📊 Phân bổ theo tỷ trọng nhu cầu",
                 "none": "⚠️ Giữ nguyên & Báo thiếu MOQ",
             }[x],
         )
@@ -422,6 +430,7 @@ with tab_po:
         current_stocks=on_hand_stocks,
         baseline=baseline,
         split=po_split,
+        moq_level=moq_scope,
     )
 
     summary = plan["summary"]
