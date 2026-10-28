@@ -98,12 +98,8 @@ def _sarima(y: pd.Series, cutoff: pd.Period) -> tuple[pd.Series, bool]:
         return out, False
 
 
-def _lgb_one(y: pd.Series, cutoff: pd.Period) -> tuple[pd.Series, bool]:
-    out = pd.Series(np.nan, index=y.index)
-    try:
-        from lightgbm import LGBMRegressor
-    except Exception:
-        return out, False
+def build_lgb_feature_frame(y: pd.Series) -> tuple[pd.DataFrame, list[str]]:
+    """Build the exact monthly feature matrix used by the Live LightGBM model."""
     frame = pd.DataFrame({"y": y.astype(float)})
     frame["lag1"] = frame["y"].shift(1)
     frame["lag2"] = frame["y"].shift(2)
@@ -112,9 +108,24 @@ def _lgb_one(y: pd.Series, cutoff: pd.Period) -> tuple[pd.Series, bool]:
     frame["roll4"] = frame["y"].shift(1).rolling(4).mean()
     frame["month"] = [p.month for p in frame.index]
     feat = ["lag1", "lag2", "lag3", "lag12", "roll4", "month"]
+    return frame, feat
+
+
+def _lgb_one(
+    y: pd.Series,
+    cutoff: pd.Period,
+    return_artifact: bool = False,
+    model_save_path: Path | None = None,
+) -> tuple[pd.Series, bool] | tuple[pd.Series, bool, dict | None]:
+    out = pd.Series(np.nan, index=y.index)
+    try:
+        from lightgbm import LGBMRegressor
+    except Exception:
+        return (out, False, None) if return_artifact else (out, False)
+    frame, feat = build_lgb_feature_frame(y)
     train = frame.loc[:cutoff].dropna()
     if len(train) < 16 or float(train["y"].sum()) <= 0 or int((train["y"] > 0).sum()) < 2:
-        return out, False
+        return (out, False, None) if return_artifact else (out, False)
     try:
         model = LGBMRegressor(
             n_estimators=300,
@@ -128,12 +139,30 @@ def _lgb_one(y: pd.Series, cutoff: pd.Period) -> tuple[pd.Series, bool]:
         model.fit(train[feat], train["y"])
         pred_idx = frame.dropna(subset=["lag1", "lag12"]).index
         if len(pred_idx) == 0:
-            return out, False
+            return (out, False, None) if return_artifact else (out, False)
         pred = model.predict(frame.loc[pred_idx, feat])
         out.loc[pred_idx] = np.clip(pred, 0, None)
-        return out, True
+
+        artifact = None
+        if return_artifact:
+            imp_split = [int(v) for v in model.booster_.feature_importance(importance_type="split")]
+            imp_gain = [float(v) for v in model.booster_.feature_importance(importance_type="gain")]
+            artifact = {
+                "features": feat,
+                "importance_split": dict(zip(feat, imp_split)),
+                "importance_gain": dict(zip(feat, imp_gain)),
+                "n_train_samples": int(len(train)),
+                "train_sum": float(train["y"].sum()),
+            }
+            if model_save_path:
+                try:
+                    model.booster_.save_model(str(model_save_path))
+                except Exception:
+                    pass
+
+        return (out, True, artifact) if return_artifact else (out, True)
     except Exception:
-        return out, False
+        return (out, False, None) if return_artifact else (out, False)
 
 
 def rule_tag(abc_xyz: str, smooth: bool, sarima_ok: bool, lgb_ok: bool, tes_ok: bool) -> str:
@@ -185,6 +214,8 @@ def run_forecast(
     abc_lookup = sku_abc_map(baseline)
     rows = []
     run_id = run_id or new_run_id("fcst")
+    dest = run_dir(run_id)
+    lgb_artifacts: dict[str, Any] = {}
     for sku in skus:
         abc = S4_CLASS.get(sku) or abc_lookup.get(sku, "CZ")
         # Hierarchical base: SKU MA4 × channel share of 2024 train.
@@ -200,7 +231,11 @@ def run_forecast(
             snaive = _snaive(y)
             tes, tes_ok = _tes(y, cutoff_p)
             sarima, sarima_ok = _sarima(y, cutoff_p)
-            lgb, lgb_ok = _lgb_one(y, cutoff_p)
+            model_path = dest / f"lgb_{sku}_{ch}.txt"
+            lgb_res = _lgb_one(y, cutoff_p, return_artifact=True, model_save_path=model_path)
+            lgb, lgb_ok, lgb_art = lgb_res
+            if lgb_art:
+                lgb_artifacts[f"{sku}__{ch}"] = lgb_art
             sku_total = sum(_panel(hist, sku, c).loc[:cutoff_p].iloc[-4:].mean() for c in CHANNELS)
             hier = pd.Series(sku_total * shares[ch] / total, index=y.index)
             bundle = {
@@ -241,8 +276,11 @@ def run_forecast(
                         "lgb_ok": lgb_ok,
                     })
     df = pd.DataFrame(rows)
-    dest = run_dir(run_id)
     df.to_csv(dest / "forecast.csv", index=False)
+    if lgb_artifacts:
+        import json
+        with open(dest / "lgb_artifacts.json", "w", encoding="utf-8") as f:
+            json.dump(lgb_artifacts, f, indent=2)
     best = df[(df["model"] == "Optimized_Best") & (df["year"] == 2024) & (df["month"] <= 8)]
     residuals = best.rename(columns={"residual": "residual"})[
         ["sku", "channel", "month", "residual"]
