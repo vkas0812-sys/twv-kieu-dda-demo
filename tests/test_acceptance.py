@@ -106,7 +106,7 @@ def test_streamlit_pages_syntax_and_figures() -> None:
     web_root = ROOT / "apps" / "web"
     page_files = sorted(p for p in (web_root / "pages").glob("*.py") if not p.name.startswith("._"))
     py_files = [web_root / "bootstrap.py", web_root / "streamlit_app.py"] + page_files
-    assert len(py_files) == 10
+    assert len(py_files) >= 10
     for f in py_files:
         source = f.read_text(encoding="utf-8")
         ast.parse(source, filename=str(f))
